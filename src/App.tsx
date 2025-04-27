@@ -1,12 +1,27 @@
 import { useState } from 'react'
 
+interface NewsResult {
+  articles: any[];
+  highRiskArticles: number[];
+  score: number;
+}
+
+interface RiskBreakdown {
+  country: NewsResult;
+  item: NewsResult;
+  category: NewsResult;
+  quantity: NewsResult;
+  finalScore: number;
+  finalLevel: string;
+}
+
 interface InventoryItem {
   id: number;
   itemName: string;
   category: string;
   originCountry: string;
   quantity: number;
-  riskLevel: string;
+  riskBreakdown: RiskBreakdown;
 }
 
 function App() {
@@ -17,21 +32,97 @@ function App() {
     originCountry: '',
     quantity: 0
   });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newItem: InventoryItem = {
-      id: Date.now(),
-      ...formData,
-      riskLevel: 'LOW'
+  const NEWS_API_KEY = '7b79cbcfc96e4a7e8075f0ad19b5089a';
+  const highRiskKeywords = [
+    'tariff', 'trade war', 'sanction', 'ban', 'restriction', 'high duty', 'import tax', 'retaliation', 'penalty', 'levy', 'embargo', 'quota', 'anti-dumping', 'duty'
+  ];
+
+  const getNewsRisk = async (query: string, context: string): Promise<NewsResult> => {
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}&language=en&sortBy=publishedAt&pageSize=10`;
+    const response = await fetch(url);
+    const data = await response.json();
+    let highRiskArticles: number[] = [];
+    if (data.status === 'ok') {
+      data.articles.forEach((article: any, idx: number) => {
+        if (highRiskKeywords.some(keyword =>
+          (article.title + ' ' + (article.description || '')).toLowerCase().includes(keyword)
+        )) {
+          highRiskArticles.push(idx);
+        }
+      });
+    }
+    // Score: 100 if any high risk, else 0, or scale by number of high risk articles
+    const score = highRiskArticles.length > 0 ? Math.min(100, highRiskArticles.length * 25) : 0;
+    return {
+      articles: data.articles || [],
+      highRiskArticles,
+      score
     };
-    setInventory([...inventory, newItem]);
-    setFormData({
-      itemName: '',
-      category: '',
-      originCountry: '',
-      quantity: 0
-    });
+  };
+
+  const getQuantityRisk = (quantity: number): NewsResult => {
+    // Simple logic: if quantity > 1000, risk increases
+    let score = 0;
+    if (quantity > 10000) score = 100;
+    else if (quantity > 1000) score = 50;
+    else if (quantity > 100) score = 20;
+    return { articles: [], highRiskArticles: [], score };
+  };
+
+  const getFinalRisk = (scores: {country: number, item: number, category: number, quantity: number}): {finalScore: number, finalLevel: string} => {
+    // Weighted: Item 40%, Country 30%, Category 20%, Quantity 10%
+    const finalScore = Math.round(scores.item * 0.4 + scores.country * 0.3 + scores.category * 0.2 + scores.quantity * 0.1);
+    let finalLevel = 'LOW';
+    if (finalScore >= 70) finalLevel = 'HIGH';
+    else if (finalScore >= 30) finalLevel = 'MEDIUM';
+    return { finalScore, finalLevel };
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      // Run all queries in parallel
+      const [countryRes, itemRes, categoryRes] = await Promise.all([
+        getNewsRisk(`US ${formData.originCountry} tariffs`, 'country'),
+        getNewsRisk(`US ${formData.originCountry} ${formData.itemName} tariff OR US ${formData.itemName} tariff`, 'item'),
+        getNewsRisk(`US ${formData.category} tariffs`, 'category')
+      ]);
+      const quantityRes = getQuantityRisk(formData.quantity);
+      const { finalScore, finalLevel } = getFinalRisk({
+        country: countryRes.score,
+        item: itemRes.score,
+        category: categoryRes.score,
+        quantity: quantityRes.score
+      });
+      const riskBreakdown: RiskBreakdown = {
+        country: countryRes,
+        item: itemRes,
+        category: categoryRes,
+        quantity: quantityRes,
+        finalScore,
+        finalLevel
+      };
+      const newItem: InventoryItem = {
+        id: Date.now(),
+        ...formData,
+        riskBreakdown
+      };
+      setInventory([...inventory, newItem]);
+      setFormData({
+        itemName: '',
+        category: '',
+        originCountry: '',
+        quantity: 0
+      });
+    } catch (err) {
+      setError('Error fetching news data.');
+    }
+    setLoading(false);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -100,6 +191,13 @@ function App() {
                 />
               </div>
               
+              {loading && (
+                <div className="text-blue-600 text-sm">Checking news for tariff risk...</div>
+              )}
+              {error && (
+                <div className="text-red-600 text-sm">{error}</div>
+              )}
+              
               <button
                 type="submit"
                 className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -130,10 +228,79 @@ function App() {
                         <p className="text-sm font-medium text-gray-500">Quantity</p>
                         <p className="text-sm text-gray-900">{item.quantity}</p>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-500">Risk Level</p>
-                        <p className="text-sm text-gray-900">{item.riskLevel}</p>
+                      <div className="col-span-2">
+                        <p className="text-sm font-medium text-gray-500">Risk Assessment</p>
+                        <p className={`text-lg font-bold ${item.riskBreakdown.finalLevel === 'HIGH' ? 'text-red-600' : item.riskBreakdown.finalLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600'}`}>{item.riskBreakdown.finalLevel} ({item.riskBreakdown.finalScore}/100)</p>
+                        <div className="mt-2 text-xs text-gray-700">
+                          <div>Country Risk: <span className={item.riskBreakdown.country.score >= 70 ? 'text-red-600' : item.riskBreakdown.country.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.country.score}/100</span></div>
+                          <div>Item Risk: <span className={item.riskBreakdown.item.score >= 70 ? 'text-red-600' : item.riskBreakdown.item.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.item.score}/100</span></div>
+                          <div>Category Risk: <span className={item.riskBreakdown.category.score >= 70 ? 'text-red-600' : item.riskBreakdown.category.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.category.score}/100</span></div>
+                          <div>Quantity Risk: <span className={item.riskBreakdown.quantity.score >= 70 ? 'text-red-600' : item.riskBreakdown.quantity.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.quantity.score}/100</span></div>
+                        </div>
                       </div>
+                    </div>
+                    {/* News Transparency Section */}
+                    <div className="mt-4">
+                      <p className="text-sm font-semibold text-gray-700 mb-2">News Used for Risk Assessment:</p>
+                      <div className="mb-2">
+                        <span className="font-semibold">Country News:</span>
+                        {item.riskBreakdown.country.articles.length === 0 ? (
+                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                        ) : (
+                          <ul className="space-y-1">
+                            {item.riskBreakdown.country.articles.map((article, idx) => (
+                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.country.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                {item.riskBreakdown.country.highRiskArticles.includes(idx) && (
+                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="mb-2">
+                        <span className="font-semibold">Item News:</span>
+                        {item.riskBreakdown.item.articles.length === 0 ? (
+                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                        ) : (
+                          <ul className="space-y-1">
+                            {item.riskBreakdown.item.articles.map((article, idx) => (
+                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.item.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                {item.riskBreakdown.item.highRiskArticles.includes(idx) && (
+                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="mb-2">
+                        <span className="font-semibold">Category News:</span>
+                        {item.riskBreakdown.category.articles.length === 0 ? (
+                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                        ) : (
+                          <ul className="space-y-1">
+                            {item.riskBreakdown.category.articles.map((article, idx) => (
+                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.category.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                {item.riskBreakdown.category.highRiskArticles.includes(idx) && (
+                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="mb-2">
+                        <span className="font-semibold">Quantity Risk:</span>
+                        <span className="ml-2 text-xs text-gray-500">{item.riskBreakdown.quantity.score > 0 ? `High quantity may increase risk.` : 'No bulk restrictions found.'}</span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">Powered by <a href="https://newsapi.org/" className="underline" target="_blank" rel="noopener noreferrer">NewsAPI.org</a></p>
                     </div>
                   </div>
                 ))}
