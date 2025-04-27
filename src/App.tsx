@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import * as XLSX from 'xlsx'
+import { Routes, Route, Link } from 'react-router-dom'
 
 interface NewsResult {
   articles: any[];
@@ -111,7 +113,75 @@ const useAlphaVantageCommodity = (symbol: string) => {
   return { data, price, change, lastUpdated, error };
 };
 
+const NEWS_API_KEY = '7b79cbcfc96e4a7e8075f0ad19b5089a';
+const highRiskKeywords = [
+  'tariff', 'trade war', 'sanction', 'ban', 'restriction', 'high duty', 'import tax', 'retaliation', 'penalty', 'levy', 'embargo', 'quota', 'anti-dumping', 'duty'
+];
+
+const getNewsRisk = async (query: string, context: string): Promise<NewsResult> => {
+  const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}&language=en&sortBy=publishedAt&pageSize=10`;
+  const response = await fetch(url);
+  const data = await response.json();
+  let highRiskArticles: number[] = [];
+  if (data.status === 'ok') {
+    data.articles.forEach((article: any, idx: number) => {
+      if (highRiskKeywords.some(keyword =>
+        (article.title + ' ' + (article.description || '')).toLowerCase().includes(keyword)
+      )) {
+        highRiskArticles.push(idx);
+      }
+    });
+  }
+  // Score: 100 if any high risk, else 0, or scale by number of high risk articles
+  const score = highRiskArticles.length > 0 ? Math.min(100, highRiskArticles.length * 25) : 0;
+  return {
+    articles: data.articles || [],
+    highRiskArticles,
+    score
+  };
+};
+
+const getQuantityRisk = (quantity: number): NewsResult => {
+  // Simple logic: if quantity > 1000, risk increases
+  let score = 0;
+  if (quantity > 10000) score = 100;
+  else if (quantity > 1000) score = 50;
+  else if (quantity > 100) score = 20;
+  return { articles: [], highRiskArticles: [], score };
+};
+
+const getFinalRisk = (scores: {country: number, item: number, category: number, quantity: number}): {finalScore: number, finalLevel: string} => {
+  // Weighted: Item 40%, Country 30%, Category 20%, Quantity 10%
+  const finalScore = Math.round(scores.item * 0.4 + scores.country * 0.3 + scores.category * 0.2 + scores.quantity * 0.1);
+  let finalLevel = 'LOW';
+  if (finalScore >= 70) finalLevel = 'HIGH';
+  else if (finalScore >= 30) finalLevel = 'MEDIUM';
+  return { finalScore, finalLevel };
+};
+
 function App() {
+  return (
+    <div className="min-h-screen bg-gray-100 py-6 flex flex-col justify-center sm:py-12">
+      <div className="relative py-3 sm:max-w-xl sm:mx-auto">
+        <div className="relative px-4 py-10 bg-white shadow-lg sm:rounded-3xl sm:p-20">
+          <div className="max-w-md mx-auto">
+            <div className="flex justify-between mb-8">
+              <Link to="/" className="text-blue-600 hover:underline">Manual Entry</Link>
+              <Link to="/csv" className="text-blue-600 hover:underline">CSV Upload</Link>
+            </div>
+            <Routes>
+              <Route path="/" element={<ManualEntryView />} />
+              <Route path="/csv" element={<CSVUploadView />} />
+            </Routes>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Manual entry view (original)
+function ManualEntryView() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [formData, setFormData] = useState({
     itemName: '',
@@ -124,52 +194,6 @@ function App() {
   const [selectedTab, setSelectedTab] = useState(0);
   const [selectedCommodity, setSelectedCommodity] = useState('COPPER');
   const { data: liveData, price, change, lastUpdated, error: liveError } = useAlphaVantageCommodity(selectedCommodity);
-
-  const NEWS_API_KEY = '7b79cbcfc96e4a7e8075f0ad19b5089a';
-  const highRiskKeywords = [
-    'tariff', 'trade war', 'sanction', 'ban', 'restriction', 'high duty', 'import tax', 'retaliation', 'penalty', 'levy', 'embargo', 'quota', 'anti-dumping', 'duty'
-  ];
-
-  const getNewsRisk = async (query: string, context: string): Promise<NewsResult> => {
-    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}&language=en&sortBy=publishedAt&pageSize=10`;
-    const response = await fetch(url);
-    const data = await response.json();
-    let highRiskArticles: number[] = [];
-    if (data.status === 'ok') {
-      data.articles.forEach((article: any, idx: number) => {
-        if (highRiskKeywords.some(keyword =>
-          (article.title + ' ' + (article.description || '')).toLowerCase().includes(keyword)
-        )) {
-          highRiskArticles.push(idx);
-        }
-      });
-    }
-    // Score: 100 if any high risk, else 0, or scale by number of high risk articles
-    const score = highRiskArticles.length > 0 ? Math.min(100, highRiskArticles.length * 25) : 0;
-    return {
-      articles: data.articles || [],
-      highRiskArticles,
-      score
-    };
-  };
-
-  const getQuantityRisk = (quantity: number): NewsResult => {
-    // Simple logic: if quantity > 1000, risk increases
-    let score = 0;
-    if (quantity > 10000) score = 100;
-    else if (quantity > 1000) score = 50;
-    else if (quantity > 100) score = 20;
-    return { articles: [], highRiskArticles: [], score };
-  };
-
-  const getFinalRisk = (scores: {country: number, item: number, category: number, quantity: number}): {finalScore: number, finalLevel: string} => {
-    // Weighted: Item 40%, Country 30%, Category 20%, Quantity 10%
-    const finalScore = Math.round(scores.item * 0.4 + scores.country * 0.3 + scores.category * 0.2 + scores.quantity * 0.1);
-    let finalLevel = 'LOW';
-    if (finalScore >= 70) finalLevel = 'HIGH';
-    else if (finalScore >= 30) finalLevel = 'MEDIUM';
-    return { finalScore, finalLevel };
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -462,6 +486,142 @@ function App() {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// CSV upload view
+function CSVUploadView() {
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      if (rows.length < 2) throw new Error('File must have a header and at least one data row.');
+      // Assume header: Item Name, Category, Origin Country, Quantity
+      const header = rows[0].map((h: string) => h.trim().toLowerCase());
+      const idxItem = header.indexOf('item name');
+      const idxCat = header.indexOf('category');
+      const idxCountry = header.indexOf('origin country');
+      const idxQty = header.indexOf('quantity');
+      if ([idxItem, idxCat, idxCountry, idxQty].some(idx => idx === -1)) {
+        throw new Error('Header must include: Item Name, Category, Origin Country, Quantity');
+      }
+      setLoading(true);
+      // Process each row, skip header
+      const newItems: InventoryItem[] = [];
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row[idxItem] || !row[idxCat] || !row[idxCountry] || isNaN(Number(row[idxQty]))) continue;
+        const itemName = String(row[idxItem]);
+        const category = String(row[idxCat]);
+        const originCountry = String(row[idxCountry]);
+        const quantity = Number(row[idxQty]);
+        try {
+          // Run all queries in parallel for each row
+          const [countryRes, itemRes, categoryRes] = await Promise.all([
+            getNewsRisk(`US ${originCountry} tariffs`, 'country'),
+            getNewsRisk(`US ${originCountry} ${itemName} tariff OR US ${itemName} tariff`, 'item'),
+            getNewsRisk(`US ${category} tariffs`, 'category')
+          ]);
+          const quantityRes = getQuantityRisk(quantity);
+          const { finalScore, finalLevel } = getFinalRisk({
+            country: countryRes.score,
+            item: itemRes.score,
+            category: categoryRes.score,
+            quantity: quantityRes.score
+          });
+          const riskBreakdown: RiskBreakdown = {
+            country: countryRes,
+            item: itemRes,
+            category: categoryRes,
+            quantity: quantityRes,
+            finalScore,
+            finalLevel
+          };
+          newItems.push({
+            id: Date.now() + i, // unique-ish
+            itemName,
+            category,
+            originCountry,
+            quantity,
+            riskBreakdown
+          });
+        } catch (err) {
+          // Skip row on error, optionally collect errors
+          continue;
+        }
+      }
+      setInventory(prev => [...prev, ...newItems]);
+      setLoading(false);
+    } catch (err: any) {
+      setError('Failed to process file: ' + (err.message || 'Unknown error'));
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 py-6 flex flex-col justify-center sm:py-12">
+      <div className="relative py-3 sm:max-w-xl sm:mx-auto">
+        <div className="relative px-4 py-10 bg-white shadow-lg sm:rounded-3xl sm:p-20">
+          <div className="max-w-md mx-auto">
+            <div className="text-center mb-8">
+              <h1 className="text-3xl font-bold text-gray-900">TariffGuard</h1>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700">Upload Excel/CSV</label>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handleFileUpload}
+                className="mt-1 block w-full text-sm text-gray-500"
+              />
+              <div className="text-xs text-gray-400 mt-1">Header must include: Item Name, Category, Origin Country, Quantity</div>
+            </div>
+            {loading && (
+              <div className="text-blue-600 text-sm">Processing file...</div>
+            )}
+            {error && (
+              <div className="text-red-600 text-sm">{error}</div>
+            )}
+            {inventory.length > 0 && (
+              <div className="overflow-x-auto mt-6">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item Name</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin Country</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {inventory.map((item) => (
+                      <tr key={item.id}>
+                        <td className="px-3 py-2 whitespace-nowrap">{item.itemName}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{item.category}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{item.originCountry}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{item.quantity}</td>
+                        <td className={`px-3 py-2 whitespace-nowrap font-bold ${item.riskBreakdown.finalLevel === 'HIGH' ? 'text-red-600' : item.riskBreakdown.finalLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600'}`}>{item.riskBreakdown.finalLevel} ({item.riskBreakdown.finalScore}/100)</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       </div>
