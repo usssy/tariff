@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 interface NewsResult {
   articles: any[];
@@ -24,6 +25,92 @@ interface InventoryItem {
   riskBreakdown: RiskBreakdown;
 }
 
+const ALPHA_VANTAGE_API_KEY = 'UNG5SWUPV56Q1DI5';
+
+const commoditySymbols: Record<string, string> = {
+  COPPER: 'COPPER',
+  OIL: 'WTI',
+  GOLD: 'XAU',
+  SILVER: 'XAG',
+};
+
+const commodities = [
+  { label: 'Copper', symbol: 'COPPER' },
+  { label: 'Oil', symbol: 'OIL' },
+  { label: 'Gold', symbol: 'GOLD' },
+  { label: 'Silver', symbol: 'SILVER' },
+];
+
+const useAlphaVantageCommodity = (symbol: string) => {
+  const [data, setData] = useState<{ time: string; price: number }[]>([]);
+  const [price, setPrice] = useState<number | null>(null);
+  const [change, setChange] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchData = async () => {
+      let url = '';
+      setError(null);
+      if (symbol === 'COPPER') {
+        url = `https://www.alphavantage.co/query?function=COMMODITY_EXCHANGE_RATE&from_commodity=CU&to_currency=USD&apikey=${ALPHA_VANTAGE_API_KEY}`;
+      } else if (symbol === 'OIL') {
+        url = `https://www.alphavantage.co/query?function=WTI&interval=5min&apikey=${ALPHA_VANTAGE_API_KEY}`;
+      } else if (symbol === 'GOLD') {
+        url = `https://www.alphavantage.co/query?function=COMMODITY_EXCHANGE_RATE&from_commodity=XAU&to_currency=USD&apikey=${ALPHA_VANTAGE_API_KEY}`;
+      } else if (symbol === 'SILVER') {
+        url = `https://www.alphavantage.co/query?function=COMMODITY_EXCHANGE_RATE&from_commodity=XAG&to_currency=USD&apikey=${ALPHA_VANTAGE_API_KEY}`;
+      }
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        let priceVal = null;
+        let chartData: { time: string; price: number }[] = [];
+        if (symbol === 'COPPER' || symbol === 'GOLD' || symbol === 'SILVER') {
+          priceVal = parseFloat(json['Realtime Commodity Exchange Rate']?.['5. Exchange Rate'] || '0');
+          if (!isNaN(priceVal) && priceVal > 0) {
+            chartData = [{ time: new Date().toLocaleTimeString(), price: priceVal }];
+          }
+        } else if (symbol === 'OIL') {
+          const series = json['Time Series (5min)'] || {};
+          chartData = Object.entries(series).map(([time, val]: any) => ({
+            time,
+            price: parseFloat(val['1. open'])
+          })).reverse();
+          priceVal = chartData.length > 0 ? chartData[chartData.length - 1].price : null;
+        }
+        if (isMounted) {
+          if (priceVal && chartData.length > 0) {
+            setPrice(priceVal);
+            setChange(null);
+            setData(chartData);
+            setLastUpdated(new Date());
+            setError(null);
+          } else {
+            throw new Error('No valid data');
+          }
+        }
+      } catch (e) {
+        if (isMounted) {
+          setError('Live data not available. Showing demo data.');
+          setPrice(Math.random() * 1000 + 1000);
+          setChange(Math.random() > 0.5 ? 1 : -1);
+          setData([{ time: new Date().toLocaleTimeString(), price: Math.random() * 1000 + 1000 }]);
+          setLastUpdated(new Date());
+        }
+      }
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [symbol]);
+  return { data, price, change, lastUpdated, error };
+};
+
 function App() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [formData, setFormData] = useState({
@@ -34,6 +121,9 @@ function App() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState(0);
+  const [selectedCommodity, setSelectedCommodity] = useState('COPPER');
+  const { data: liveData, price, change, lastUpdated, error: liveError } = useAlphaVantageCommodity(selectedCommodity);
 
   const NEWS_API_KEY = '7b79cbcfc96e4a7e8075f0ad19b5089a';
   const highRiskKeywords = [
@@ -211,97 +301,163 @@ function App() {
               <div className="space-y-4">
                 {inventory.map((item) => (
                   <div key={item.id} className="bg-gray-50 p-4 rounded-lg">
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Tabs */}
+                    <div className="mb-4 border-b border-gray-200 flex">
+                      {['Risk Assessment', 'News & Analysis', 'Live Data & Numbers'].map((tab, idx) => (
+                        <button
+                          key={tab}
+                          className={`px-4 py-2 -mb-px border-b-2 font-medium focus:outline-none transition-colors duration-200 ${selectedTab === idx ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-indigo-600'}`}
+                          onClick={() => setSelectedTab(idx)}
+                        >
+                          {tab}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Tab Panels */}
+                    {selectedTab === 0 && (
+                      // Risk Assessment Tab
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Item Name</p>
-                        <p className="text-sm text-gray-900">{item.itemName}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-500">Category</p>
-                        <p className="text-sm text-gray-900">{item.category}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-500">Origin Country</p>
-                        <p className="text-sm text-gray-900">{item.originCountry}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-500">Quantity</p>
-                        <p className="text-sm text-gray-900">{item.quantity}</p>
-                      </div>
-                      <div className="col-span-2">
-                        <p className="text-sm font-medium text-gray-500">Risk Assessment</p>
-                        <p className={`text-lg font-bold ${item.riskBreakdown.finalLevel === 'HIGH' ? 'text-red-600' : item.riskBreakdown.finalLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600'}`}>{item.riskBreakdown.finalLevel} ({item.riskBreakdown.finalScore}/100)</p>
-                        <div className="mt-2 text-xs text-gray-700">
-                          <div>Country Risk: <span className={item.riskBreakdown.country.score >= 70 ? 'text-red-600' : item.riskBreakdown.country.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.country.score}/100</span></div>
-                          <div>Item Risk: <span className={item.riskBreakdown.item.score >= 70 ? 'text-red-600' : item.riskBreakdown.item.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.item.score}/100</span></div>
-                          <div>Category Risk: <span className={item.riskBreakdown.category.score >= 70 ? 'text-red-600' : item.riskBreakdown.category.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.category.score}/100</span></div>
-                          <div>Quantity Risk: <span className={item.riskBreakdown.quantity.score >= 70 ? 'text-red-600' : item.riskBreakdown.quantity.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.quantity.score}/100</span></div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-gray-500">Item Name</p>
+                            <p className="text-sm text-gray-900">{item.itemName}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-500">Category</p>
+                            <p className="text-sm text-gray-900">{item.category}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-500">Origin Country</p>
+                            <p className="text-sm text-gray-900">{item.originCountry}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-500">Quantity</p>
+                            <p className="text-sm text-gray-900">{item.quantity}</p>
+                          </div>
+                          <div className="col-span-2">
+                            <p className="text-sm font-medium text-gray-500">Risk Assessment</p>
+                            <p className={`text-lg font-bold ${item.riskBreakdown.finalLevel === 'HIGH' ? 'text-red-600' : item.riskBreakdown.finalLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600'}`}>{item.riskBreakdown.finalLevel} ({item.riskBreakdown.finalScore}/100)</p>
+                            <div className="mt-2 text-xs text-gray-700">
+                              <div>Country Risk: <span className={item.riskBreakdown.country.score >= 70 ? 'text-red-600' : item.riskBreakdown.country.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.country.score}/100</span></div>
+                              <div>Item Risk: <span className={item.riskBreakdown.item.score >= 70 ? 'text-red-600' : item.riskBreakdown.item.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.item.score}/100</span></div>
+                              <div>Category Risk: <span className={item.riskBreakdown.category.score >= 70 ? 'text-red-600' : item.riskBreakdown.category.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.category.score}/100</span></div>
+                              <div>Quantity Risk: <span className={item.riskBreakdown.quantity.score >= 70 ? 'text-red-600' : item.riskBreakdown.quantity.score >= 30 ? 'text-yellow-600' : 'text-green-600'}>{item.riskBreakdown.quantity.score}/100</span></div>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    {/* News Transparency Section */}
-                    <div className="mt-4">
-                      <p className="text-sm font-semibold text-gray-700 mb-2">News Used for Risk Assessment:</p>
-                      <div className="mb-2">
-                        <span className="font-semibold">Country News:</span>
-                        {item.riskBreakdown.country.articles.length === 0 ? (
-                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
-                        ) : (
-                          <ul className="space-y-1">
-                            {item.riskBreakdown.country.articles.map((article, idx) => (
-                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.country.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
-                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
-                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
-                                {item.riskBreakdown.country.highRiskArticles.includes(idx) && (
-                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
-                                )}
-                              </li>
+                    )}
+                    {selectedTab === 1 && (
+                      // News & Analysis Tab
+                      <div>
+                        <div className="mt-4">
+                          <p className="text-sm font-semibold text-gray-700 mb-2">News Used for Risk Assessment:</p>
+                          <div className="mb-2">
+                            <span className="font-semibold">Country News:</span>
+                            {item.riskBreakdown.country.articles.length === 0 ? (
+                              <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                            ) : (
+                              <ul className="space-y-1">
+                                {item.riskBreakdown.country.articles.map((article, idx) => (
+                                  <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.country.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                    <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                    <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                    {item.riskBreakdown.country.highRiskArticles.includes(idx) && (
+                                      <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div className="mb-2">
+                            <span className="font-semibold">Item News:</span>
+                            {item.riskBreakdown.item.articles.length === 0 ? (
+                              <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                            ) : (
+                              <ul className="space-y-1">
+                                {item.riskBreakdown.item.articles.map((article, idx) => (
+                                  <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.item.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                    <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                    <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                    {item.riskBreakdown.item.highRiskArticles.includes(idx) && (
+                                      <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div className="mb-2">
+                            <span className="font-semibold">Category News:</span>
+                            {item.riskBreakdown.category.articles.length === 0 ? (
+                              <span className="text-xs text-gray-500 ml-2">No news found.</span>
+                            ) : (
+                              <ul className="space-y-1">
+                                {item.riskBreakdown.category.articles.map((article, idx) => (
+                                  <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.category.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
+                                    <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
+                                    <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
+                                    {item.riskBreakdown.category.highRiskArticles.includes(idx) && (
+                                      <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div className="mb-2">
+                            <span className="font-semibold">Quantity Risk:</span>
+                            <span className="ml-2 text-xs text-gray-500">{item.riskBreakdown.quantity.score > 0 ? `High quantity may increase risk.` : 'No bulk restrictions found.'}</span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-2">Powered by <a href="https://newsapi.org/" className="underline" target="_blank" rel="noopener noreferrer">NewsAPI.org</a></p>
+                        </div>
+                      </div>
+                    )}
+                    {selectedTab === 2 && (
+                      // Live Data & Numbers Tab
+                      <div>
+                        <div className="mb-4">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Commodity</label>
+                          <select
+                            className="border rounded px-2 py-1"
+                            value={selectedCommodity}
+                            onChange={e => setSelectedCommodity(e.target.value)}
+                          >
+                            {commodities.map(c => (
+                              <option key={c.symbol} value={c.symbol}>{c.label}</option>
                             ))}
-                          </ul>
+                          </select>
+                        </div>
+                        {liveError && (
+                          <div className="mb-2 text-xs text-red-600">{liveError}</div>
                         )}
+                        <div className="mb-2">
+                          <span className="font-semibold">Live Price: </span>
+                          <span className={change === 1 ? 'text-green-600' : 'text-red-600'}>
+                            {price ? `$${price.toFixed(2)}` : 'Loading...'}
+                          </span>
+                          <span className="ml-2 text-xs">(updates every 60s)</span>
+                          {lastUpdated && <span className="ml-2 text-xs text-gray-500">Last updated: {lastUpdated.toLocaleTimeString()}</span>}
+                        </div>
+                        {/* Live commodity price graph */}
+                        <div className="h-48 bg-gray-200 rounded flex items-center justify-center text-gray-500 mb-4">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={liveData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="time" hide />
+                              <YAxis domain={['auto', 'auto']} />
+                              <Tooltip />
+                              <Line type="monotone" dataKey="price" stroke="#8884d8" dot={false} isAnimationActive={false} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                        {/* Placeholder for live tariff prediction graph */}
+                        <div className="h-32 bg-gray-200 rounded flex items-center justify-center text-gray-500">
+                          [Tariff Prediction Graph Here]
+                        </div>
                       </div>
-                      <div className="mb-2">
-                        <span className="font-semibold">Item News:</span>
-                        {item.riskBreakdown.item.articles.length === 0 ? (
-                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
-                        ) : (
-                          <ul className="space-y-1">
-                            {item.riskBreakdown.item.articles.map((article, idx) => (
-                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.item.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
-                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
-                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
-                                {item.riskBreakdown.item.highRiskArticles.includes(idx) && (
-                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <div className="mb-2">
-                        <span className="font-semibold">Category News:</span>
-                        {item.riskBreakdown.category.articles.length === 0 ? (
-                          <span className="text-xs text-gray-500 ml-2">No news found.</span>
-                        ) : (
-                          <ul className="space-y-1">
-                            {item.riskBreakdown.category.articles.map((article, idx) => (
-                              <li key={article.url} className={`border-l-4 pl-2 ${item.riskBreakdown.category.highRiskArticles.includes(idx) ? 'border-red-500 bg-red-50' : 'border-green-500 bg-green-50'}`}>
-                                <a href={article.url} target="_blank" rel="noopener noreferrer" className="font-medium underline">{article.title}</a>
-                                <span className="ml-2 text-xs text-gray-500">({article.source?.name}, {new Date(article.publishedAt).toLocaleDateString()})</span>
-                                {item.riskBreakdown.category.highRiskArticles.includes(idx) && (
-                                  <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded">Contributed to risk</span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <div className="mb-2">
-                        <span className="font-semibold">Quantity Risk:</span>
-                        <span className="ml-2 text-xs text-gray-500">{item.riskBreakdown.quantity.score > 0 ? `High quantity may increase risk.` : 'No bulk restrictions found.'}</span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-2">Powered by <a href="https://newsapi.org/" className="underline" target="_blank" rel="noopener noreferrer">NewsAPI.org</a></p>
-                    </div>
+                    )}
                   </div>
                 ))}
               </div>
